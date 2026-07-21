@@ -68,7 +68,8 @@ li.done .t{text-decoration:line-through;color:var(--mut)}
     <button id="notifBtn" title="Enable reminder alerts">🔔</button>
     <button onclick="load()">Load</button>
     <button class="primary" onclick="save()">Save</button>
-    <button id="relinkBtn" onclick="relink()" title="Link a different file">⇄</button>
+    <button id="signBtn" onclick="signIn()" title="Sign in to OneDrive">🔑</button>
+    <button onclick="download()" title="Download a local backup copy">⬇</button>
     <input type="file" id="legacyLoad" accept=".db" style="display:none">
   </span>
 </header>
@@ -115,6 +116,7 @@ li.done .t{text-decoration:line-through;color:var(--mut)}
 <div id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
 <script>
 let db, SQLlib, filter="today", searchTerm="";
 let sortMode = localStorage.getItem("sortMode") || "manual";
@@ -130,6 +132,13 @@ initSqlJs({locateFile:f=>"https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/"+
   const saved = localStorage.getItem("db");
   db = saved ? new SQL.Database(Uint8Array.from(atob(saved), c=>c.charCodeAt(0)))
              : new SQL.Database();
+  ensureSchema();
+  snapshot(true);
+  render();
+  setInterval(check, 20000);
+});
+
+function ensureSchema(){
   db.run(`CREATE TABLE IF NOT EXISTS reminders(
     id INTEGER PRIMARY KEY, title TEXT NOT NULL, due TEXT,
     pri INTEGER DEFAULT 2, pos INTEGER DEFAULT 0, est INTEGER DEFAULT 0,
@@ -141,26 +150,16 @@ initSqlJs({locateFile:f=>"https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/"+
   add("est","INTEGER DEFAULT 0"); add("actual","INTEGER DEFAULT 0");
   add("today","INT DEFAULT 0");   add("note","TEXT DEFAULT ''");
   add("repeat_days","INTEGER DEFAULT 0");
-  snapshot(true);
-  render();
-  setInterval(check, 20000);
-});
+}
 
 function q(sql,p=[]){const s=db.prepare(sql);s.bind(p);const o=[];while(s.step())o.push(s.getAsObject());s.free();return o;}
 
-function persist(){
+function persistLocal(){
   const b = db.export(); let s="";
   for(let i=0;i<b.length;i+=0x8000) s += String.fromCharCode.apply(null,b.subarray(i,i+0x8000));
   localStorage.setItem("db", btoa(s));
   setDirty(true);
 }
-function setDirty(v){
-  dirty = v;
-  const el = document.getElementById("fileLabel");
-  el.classList.toggle("dirty", v && !!fileHandle);
-  el.textContent = fileHandle ? (v ? "● " : "") + fileHandle.name : "no file linked";
-}
-addEventListener("beforeunload", e=>{ if(dirty && fileHandle){ e.preventDefault(); e.returnValue=""; } });
 
 /* ================= undo / redo ================= */
 const UNDO_MAX = 5;
@@ -196,7 +195,7 @@ function redo(){
   updateUndoBtns(); toast("Redone");
 }
 /* commit = take a snapshot, apply change, save */
-function commit(fn){ snapshot(); fn(); persist(); render(); }
+function commit(fn){ snapshot(); fn(); persistLocal(); render(); }
 
 /* ================= time helpers ================= */
 function parseEst(s){
@@ -475,92 +474,144 @@ function check(){
       changed = true;
     }
   });
-  if(changed) persist();
+  if(changed) persistLocal();
   render();
 }
 
-/* ================= file persistence ================= */
-const HAS_FSA = "showSaveFilePicker" in window;
-let fileHandle = null;
+/* ================= OneDrive persistence (Microsoft Graph) ================= */
+const CLIENT_ID = "c730f5b7-e541-4350-bdec-1436f95a7acc";
+const DB_PATH   = "/Apps/Day-Planner/planner.db";   // change if you want another folder
+const GRAPH     = "https://graph.microsoft.com/v1.0";
+const SCOPES    = ["Files.ReadWrite", "User.Read"];
 
-function idb(mode, fn){
-  return new Promise((res,rej)=>{
-    const open = indexedDB.open("dashboard-fs", 1);
-    open.onupgradeneeded = () => open.result.createObjectStore("h");
-    open.onerror = () => rej(open.error);
-    open.onsuccess = () => {
-      const tx = open.result.transaction("h", mode);
-      const req = fn(tx.objectStore("h"));
-      req.onsuccess = () => res(req.result);
-      req.onerror = () => rej(req.error);
-    };
+let msalApp = null, account = null, remoteETag = null;
+
+function itemUrl(suffix){
+  return GRAPH + "/me/drive/root:" + DB_PATH + ":" + suffix;
+}
+
+function setDirty(v){
+  dirty = v;
+  const el = document.getElementById("fileLabel");
+  el.classList.toggle("dirty", v && !!account);
+  el.textContent = account
+    ? (v ? "● " : "") + "OneDrive: " + DB_PATH.split("/").pop()
+    : "not signed in";
+}
+addEventListener("beforeunload", e=>{ if(dirty && account){ e.preventDefault(); e.returnValue=""; } });
+
+async function initAuth(){
+  msalApp = new msal.PublicClientApplication({
+    auth: {
+      clientId: CLIENT_ID,
+      authority: "https://login.microsoftonline.com/common",
+      redirectUri: window.location.origin + window.location.pathname
+    },
+    cache: { cacheLocation: "localStorage" }
   });
-}
-const saveHandle = h => idb("readwrite", s => s.put(h, "db"));
-const loadHandle = () => idb("readonly", s => s.get("db"));
-const dropHandle = () => idb("readwrite", s => s.delete("db"));
-
-async function ensurePermission(h, write){
-  const opts = { mode: write ? "readwrite" : "read" };
-  if(await h.queryPermission(opts) === "granted") return true;
-  return await h.requestPermission(opts) === "granted";
+  await msalApp.initialize();
+  await msalApp.handleRedirectPromise();
+  const accts = msalApp.getAllAccounts();
+  if(accts.length){ account = accts[0]; msalApp.setActiveAccount(account); }
 }
 
+async function getToken(interactive){
+  if(!account){
+    if(!interactive) return null;
+    const r = await msalApp.loginPopup({ scopes: SCOPES });
+    account = r.account; msalApp.setActiveAccount(account);
+    return r.accessToken;
+  }
+  try{
+    const r = await msalApp.acquireTokenSilent({ scopes: SCOPES, account });
+    return r.accessToken;
+  }catch{
+    if(!interactive) return null;
+    const r = await msalApp.acquireTokenPopup({ scopes: SCOPES });
+    return r.accessToken;
+  }
+}
+
+async function signIn(){
+  try{
+    const t = await getToken(true);
+    if(!t) return;
+    setDirty(dirty);
+    toast("Signed in");
+    await load(true);
+  }catch(err){ toast("Sign-in failed: " + err.message); }
+}
+
+async function signOut(){
+  if(!msalApp) return;
+  await msalApp.logoutPopup({ account });
+  account = null; remoteETag = null; setDirty(dirty);
+  toast("Signed out");
+}
+
+/* ---- save: upload db.export() to OneDrive ---- */
 async function save(){
-  if(!HAS_FSA) return legacyDownload();
+  if(!msalApp){ toast("Auth not ready"); return; }
+  let token;
+  try{ token = await getToken(true); }catch(err){ toast("Sign-in failed"); return; }
+  if(!token) return;
   try{
-    if(!fileHandle){
-      fileHandle = await window.showSaveFilePicker({
-        suggestedName: "plan-your-day.db",
-        types: [{description:"SQLite database", accept:{"application/octet-stream":[".db"]}}]
-      });
-      await saveHandle(fileHandle);
-    }
-    if(!await ensurePermission(fileHandle, true)){ toast("Permission denied"); return; }
-    const w = await fileHandle.createWritable();
-    await w.write(db.export());
-    await w.close();
+    const res = await fetch(itemUrl("/content"), {
+      method: "PUT",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/octet-stream"
+      },
+      body: db.export()
+    });
+    if(!res.ok) throw new Error(res.status + " " + (await res.text()).slice(0,120));
+    const meta = await res.json();
+    remoteETag = meta.eTag || null;
     setDirty(false);
-    toast("Saved to " + fileHandle.name);
-  }catch(err){ if(err.name !== "AbortError") toast("Save failed: " + err.message); }
+    toast("Saved to OneDrive");
+  }catch(err){ toast("Save failed: " + err.message); }
 }
 
-async function load(){
-  if(!HAS_FSA) return document.getElementById("legacyLoad").click();
-  if(dirty && !confirm("Unsaved changes will be replaced. Continue?")) return;
+/* ---- load: download the .db from OneDrive ---- */
+async function load(silent){
+  if(!msalApp){ toast("Auth not ready"); return; }
+  if(!silent && dirty && !confirm("Unsaved changes will be replaced. Continue?")) return;
+  let token;
+  try{ token = await getToken(!silent); }catch{ return; }
+  if(!token) return;
   try{
-    if(!fileHandle){
-      [fileHandle] = await window.showOpenFilePicker({
-        types: [{description:"SQLite database", accept:{"application/octet-stream":[".db"]}}]
-      });
-      await saveHandle(fileHandle);
+    const res = await fetch(itemUrl("/content"), {
+      headers: { "Authorization": "Bearer " + token }
+    });
+    if(res.status === 404){
+      if(!silent) toast("No file in OneDrive yet — press Save to create it");
+      return;
     }
-    if(!await ensurePermission(fileHandle, false)){ toast("Permission denied"); return; }
-    const buf = await (await fileHandle.getFile()).arrayBuffer();
+    if(!res.ok) throw new Error(res.status);
+    const buf = await res.arrayBuffer();
     db = new SQLlib.Database(new Uint8Array(buf));
+    ensureSchema();
     undoStack = []; redoStack = []; snapshot(true);
-    persist(); setDirty(false); render();
-    toast("Loaded " + fileHandle.name);
-  }catch(err){ if(err.name !== "AbortError") toast("Load failed: " + err.message); }
+    persistLocal(); setDirty(false); render();
+    toast("Loaded from OneDrive");
+  }catch(err){ toast("Load failed: " + err.message); }
 }
 
-async function relink(){
-  await dropHandle(); fileHandle = null; setDirty(dirty); save();
-}
-
-function legacyDownload(){
+/* ---- export a local copy (fallback / backup) ---- */
+function download(){
   const blob = new Blob([db.export()],{type:"application/octet-stream"});
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = "plan-your-day.db"; a.click();
-  setDirty(false);
+  a.href = URL.createObjectURL(blob); a.download = "planner.db"; a.click();
 }
 document.getElementById("legacyLoad").onchange = e=>{
   const f = e.target.files[0]; if(!f) return;
   const r = new FileReader();
   r.onload = ()=>{
     db = new SQLlib.Database(new Uint8Array(r.result));
+    ensureSchema();
     undoStack = []; redoStack = []; snapshot(true);
-    persist(); setDirty(false); render();
+    persistLocal(); setDirty(true); render();
+    toast("Imported — press Save to push to OneDrive");
   };
   r.readAsArrayBuffer(f);
 };
@@ -571,13 +622,16 @@ function toast(msg){
   clearTimeout(t._h); t._h = setTimeout(()=>t.style.opacity = 0, 2200);
 }
 
+/* ---- boot auth, then pull latest from OneDrive ---- */
 (async ()=>{
-  if(!HAS_FSA){
-    document.getElementById("relinkBtn").style.display = "none";
-  }else{
-    try{ fileHandle = await loadHandle() || null; }catch{}
+  try{
+    await initAuth();
+    setDirty(false);
+    if(account) await load(true);
+  }catch(err){
+    console.error(err);
+    toast("Auth init failed");
   }
-  setDirty(false);
 })();
 </script>
 </body>
