@@ -116,7 +116,7 @@ li.done .t{text-decoration:line-through;color:var(--mut)}
 <div id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
-<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+<script src="https://alcdn.msauth.net/browser/3.7.1/js/msal-browser.min.js"></script>
 <script>
 let db, SQLlib, filter="today", searchTerm="";
 let sortMode = localStorage.getItem("sortMode") || "manual";
@@ -501,6 +501,7 @@ function setDirty(v){
 addEventListener("beforeunload", e=>{ if(dirty && account){ e.preventDefault(); e.returnValue=""; } });
 
 async function initAuth(){
+  if(typeof msal === "undefined"){ toast("MSAL library failed to load"); return; }
   msalApp = new msal.PublicClientApplication({
     auth: {
       clientId: CLIENT_ID,
