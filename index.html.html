@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Plan Your Day</title>
+<style>
+:root,[data-theme="dark"]{--bg:#0f1115;--panel:#171a21;--line:#2a2f3a;--txt:#e6e6e6;--mut:#8b93a3;--acc:#3b82f6;--red:#f87171;--amb:#fbbf24;--grn:#34d399}
+[data-theme="light"]{--bg:#ffffff;--panel:#f5f6f8;--line:#e2e5ea;--txt:#1a1d23;--mut:#6b7280;--acc:#2563eb;--red:#dc2626;--amb:#d97706;--grn:#059669}
+*{box-sizing:border-box}
+body{font-family:system-ui,sans-serif;margin:0;background:var(--bg);color:var(--txt)}
+header{padding:14px 24px;background:var(--panel);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.wrap{padding:24px;max-width:960px;margin:auto}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px}
+.card{background:var(--panel);padding:14px 16px;border-radius:8px}
+.card b{font-size:24px;display:block}
+.card span{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+.card.warn b{color:var(--red)}
+.card.warn span{color:var(--red)}
+form{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+input,select,button{padding:8px 10px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--txt);font:inherit}
+input#title{flex:1;min-width:200px}
+input#est{width:120px}
+button{cursor:pointer}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+button:disabled{opacity:.35;cursor:default}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--panel);border-radius:6px;margin-bottom:6px}
+li.done .t{text-decoration:line-through;color:var(--mut)}
+.num{color:var(--mut);font-size:13px;font-family:ui-monospace,monospace;min-width:26px;text-align:right;flex-shrink:0}
+.star{background:none;border:0;padding:0;font-size:15px;line-height:1;cursor:pointer;flex-shrink:0;filter:grayscale(1);opacity:.4}
+.star.on{filter:none;opacity:1}
+.body{flex:1;min-width:0}
+.body .t{display:block;word-break:break-word}
+.body .m{color:var(--mut);font-size:12px}
+.body .m .late{color:var(--red)}
+.body .m .over{color:var(--amb)}
+.note{display:block;color:var(--mut);font-size:12px;margin-top:4px;white-space:pre-wrap;word-break:break-word;border-left:2px solid var(--line);padding-left:8px;cursor:text}
+.note:hover{border-left-color:var(--acc)}
+.note-in{width:100%;margin-top:4px;min-height:56px;resize:vertical;font:inherit;font-size:13px;padding:8px 10px;border-radius:6px;border:1px solid var(--acc);background:var(--bg);color:var(--txt)}
+.note-hint{color:var(--mut);font-size:11px;margin-top:2px;display:block}
+.est{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-size:11px;color:var(--mut);white-space:nowrap;flex-shrink:0;cursor:pointer}
+.est:hover{border-color:var(--acc)}
+.est-in{width:80px;font-size:11px;padding:1px 6px;flex-shrink:0}
+#search{max-width:160px}
+.acts{display:flex;gap:4px;flex-shrink:0}
+.acts button{background:transparent;border:1px solid var(--line);width:30px;height:30px;padding:0;line-height:1}
+.acts button:hover:not(:disabled){border-color:var(--acc)}
+.rep{font-size:11px;color:var(--mut)}
+.empty{color:var(--mut);padding:28px;text-align:center}
+.filelabel{color:var(--mut);font-size:12px;font-family:ui-monospace,monospace;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.filelabel.dirty{color:var(--amb)}
+.filters{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
+.filters button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.edit-in{width:100%;margin:0}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);padding:10px 18px;border-radius:8px;opacity:0;transition:opacity .3s;pointer-events:none;font-size:14px;z-index:9}
+#ratio{color:var(--mut);font-size:12px;margin-top:14px;text-align:right}
+</style>
+</head>
+<body>
+<header>
+  <b>Plan Your Day</b>
+  <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <span id="fileLabel" class="filelabel">no file linked</span>
+    <button id="undoBtn" onclick="undo()" title="Undo (Ctrl+Z)" disabled>↶</button>
+    <button id="redoBtn" onclick="redo()" title="Redo (Ctrl+Y)" disabled>↷</button>
+    <button id="themeBtn" title="Toggle light/dark">🌙</button>
+    <button id="notifBtn" title="Enable reminder alerts">🔔</button>
+    <button onclick="load()">Load</button>
+    <button class="primary" onclick="save()">Save</button>
+    <button id="relinkBtn" onclick="relink()" title="Link a different file">⇄</button>
+    <input type="file" id="legacyLoad" accept=".db" style="display:none">
+  </span>
+</header>
+
+<div class="wrap">
+  <div class="cards">
+    <div class="card" id="capCard"><b id="cCap">0h</b><span id="capLabel">Today's load</span></div>
+    <div class="card"><b id="cToday">0</b><span>On today</span></div>
+    <div class="card"><b id="cDue">0</b><span>Overdue</span></div>
+    <div class="card"><b id="cOpen">0</b><span>Backlog</span></div>
+  </div>
+
+  <form id="addForm">
+    <input id="title" placeholder="What needs doing?" required>
+    <input id="when" type="datetime-local">
+    <input id="est" placeholder="Est. 90m / 2h" title="Estimated time — 45m, 2h, 1h30">
+    <select id="rep" title="Repeat on completion">
+      <option value="0">No repeat</option>
+      <option value="1">Daily</option>
+      <option value="7">Weekly</option>
+      <option value="30">Monthly</option>
+      <option value="90">Quarterly</option>
+    </select>
+    <button class="primary">Add</button>
+  </form>
+
+  <div class="filters">
+    <button data-f="today" class="on">Today</button>
+    <button data-f="all">All</button>
+    <button data-f="done">Done</button>
+    <input id="search" placeholder="Search tasks…">
+    <select id="sortBy" style="margin-left:auto" title="Sort order">
+      <option value="manual">Manual order</option>
+      <option value="due">Due date</option>
+      <option value="est-asc">Quickest first</option>
+    </select>
+    <button id="capBtn" title="Set daily capacity">⚙</button>
+    <button id="clearDone">Clear done</button>
+  </div>
+
+  <ul id="list"></ul>
+  <div id="ratio"></div>
+</div>
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+<script>
+let db, SQLlib, filter="today", searchTerm="";
+let sortMode = localStorage.getItem("sortMode") || "manual";
+let capacity = +(localStorage.getItem("capacity") || 360);   // minutes/day
+let dirty = false;
+
+const esc = t => String(t ?? "").replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ================= boot ================= */
+initSqlJs({locateFile:f=>"https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/"+f}).then(SQL=>{
+  SQLlib = SQL;
+  const saved = localStorage.getItem("db");
+  db = saved ? new SQL.Database(Uint8Array.from(atob(saved), c=>c.charCodeAt(0)))
+             : new SQL.Database();
+  db.run(`CREATE TABLE IF NOT EXISTS reminders(
+    id INTEGER PRIMARY KEY, title TEXT NOT NULL, due TEXT,
+    pri INTEGER DEFAULT 2, pos INTEGER DEFAULT 0, est INTEGER DEFAULT 0,
+    actual INTEGER DEFAULT 0, today INT DEFAULT 0, note TEXT DEFAULT '',
+    repeat_days INTEGER DEFAULT 0, done INT DEFAULT 0, fired INT DEFAULT 0)`);
+  const cols = q("PRAGMA table_info(reminders)").map(c=>c.name);
+  const add = (n,d)=>{ if(!cols.includes(n)) db.run(`ALTER TABLE reminders ADD COLUMN ${n} ${d}`); };
+  add("pri","INTEGER DEFAULT 2"); add("pos","INTEGER DEFAULT 0");
+  add("est","INTEGER DEFAULT 0"); add("actual","INTEGER DEFAULT 0");
+  add("today","INT DEFAULT 0");   add("note","TEXT DEFAULT ''");
+  add("repeat_days","INTEGER DEFAULT 0");
+  snapshot(true);
+  render();
+  setInterval(check, 20000);
+});
+
+function q(sql,p=[]){const s=db.prepare(sql);s.bind(p);const o=[];while(s.step())o.push(s.getAsObject());s.free();return o;}
+
+function persist(){
+  const b = db.export(); let s="";
+  for(let i=0;i<b.length;i+=0x8000) s += String.fromCharCode.apply(null,b.subarray(i,i+0x8000));
+  localStorage.setItem("db", btoa(s));
+  setDirty(true);
+}
+function setDirty(v){
+  dirty = v;
+  const el = document.getElementById("fileLabel");
+  el.classList.toggle("dirty", v && !!fileHandle);
+  el.textContent = fileHandle ? (v ? "● " : "") + fileHandle.name : "no file linked";
+}
+addEventListener("beforeunload", e=>{ if(dirty && fileHandle){ e.preventDefault(); e.returnValue=""; } });
+
+/* ================= undo / redo ================= */
+const UNDO_MAX = 5;
+let undoStack = [], redoStack = [];
+function snapshot(initial){
+  if(!db) return;
+  undoStack.push(db.export());
+  if(undoStack.length > UNDO_MAX+1) undoStack.shift();
+  if(!initial) redoStack = [];
+  updateUndoBtns();
+}
+function updateUndoBtns(){
+  document.getElementById("undoBtn").disabled = undoStack.length < 2;
+  document.getElementById("redoBtn").disabled = redoStack.length === 0;
+}
+function restore(bytes){
+  db = new SQLlib.Database(new Uint8Array(bytes));
+  const b = db.export(); let s="";
+  for(let i=0;i<b.length;i+=0x8000) s += String.fromCharCode.apply(null,b.subarray(i,i+0x8000));
+  localStorage.setItem("db", btoa(s));
+  setDirty(true); render();
+}
+function undo(){
+  if(undoStack.length < 2) return;
+  redoStack.push(undoStack.pop());
+  restore(undoStack[undoStack.length-1]);
+  updateUndoBtns(); toast("Undone");
+}
+function redo(){
+  if(!redoStack.length) return;
+  const b = redoStack.pop();
+  undoStack.push(b); restore(b);
+  updateUndoBtns(); toast("Redone");
+}
+/* commit = take a snapshot, apply change, save */
+function commit(fn){ snapshot(); fn(); persist(); render(); }
+
+/* ================= time helpers ================= */
+function parseEst(s){
+  s = String(s||"").trim().toLowerCase();
+  if(!s) return 0;
+  let m = s.match(/^(\d+(?:\.\d+)?)\s*h(?:ours?)?\s*(\d+)?\s*m?$/);
+  if(m) return Math.round(parseFloat(m[1])*60) + (+m[2]||0);
+  m = s.match(/^(\d+(?:\.\d+)?)\s*m(?:in(?:utes?)?)?$/);
+  if(m) return Math.round(parseFloat(m[1]));
+  m = s.match(/^(\d+(?:\.\d+)?)$/);
+  if(m) return Math.round(parseFloat(m[1]));
+  return 0;
+}
+function fmtEst(min){
+  if(!min) return "";
+  const h = Math.floor(min/60), m = Math.round(min%60);
+  return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+}
+const todayStr = () => new Date().toISOString().slice(0,10);
+function isToday(r){
+  if(r.today) return true;
+  if(!r.due) return false;
+  return r.due.slice(0,10) <= todayStr();   // due today or overdue
+}
+
+/* ================= actions ================= */
+document.getElementById("addForm").onsubmit = e=>{
+  e.preventDefault();
+  const t = title.value.trim(); if(!t) return;
+  commit(()=>{
+    const nextPos = (q("SELECT COALESCE(MAX(pos),0)+1 AS p FROM reminders")[0]||{p:1}).p;
+    db.run("INSERT INTO reminders(title,due,pos,est,repeat_days) VALUES(?,?,?,?,?)",
+      [t, when.value || null, nextPos, parseEst(est.value), +rep.value]);
+  });
+  title.value=""; when.value=""; est.value=""; rep.value="0";
+  title.focus();
+};
+
+function toggle(id){
+  const r = q("SELECT * FROM reminders WHERE id=?",[id])[0];
+  if(!r) return;
+  if(r.done){ commit(()=>db.run("UPDATE reminders SET done=0,actual=0 WHERE id=?",[id])); return; }
+
+  // completing: ask how long it actually took (skip = no data)
+  let actual = 0;
+  const ans = prompt(`Done: ${r.title}\n\nHow long did it actually take? (e.g. 45m, 2h — blank to skip)`,
+                     r.est ? fmtEst(r.est) : "");
+  if(ans === null) return;              // cancelled entirely
+  actual = parseEst(ans);
+
+  commit(()=>{
+    db.run("UPDATE reminders SET done=1, actual=?, today=0 WHERE id=?",[actual,id]);
+    if(r.repeat_days > 0){              // clone forward
+      let nextDue = null;
+      if(r.due){
+        const d = new Date(r.due);
+        d.setDate(d.getDate() + r.repeat_days);
+        nextDue = d.toISOString().slice(0,16);
+      }
+      const nextPos = (q("SELECT COALESCE(MAX(pos),0)+1 AS p FROM reminders")[0]||{p:1}).p;
+      db.run("INSERT INTO reminders(title,due,pos,est,note,repeat_days) VALUES(?,?,?,?,?,?)",
+        [r.title, nextDue, nextPos, r.est, r.note||'', r.repeat_days]);
+    }
+  });
+}
+function del(id){ commit(()=>db.run("DELETE FROM reminders WHERE id=?",[id])); }
+function star(id){ commit(()=>db.run("UPDATE reminders SET today=1-today WHERE id=?",[id])); }
+
+/* inline edit — double-click the title */
+function startEdit(id, el){
+  const r = q("SELECT title FROM reminders WHERE id=?",[id])[0];
+  const inp = document.createElement("input");
+  inp.className = "edit-in"; inp.value = r.title;
+  el.replaceWith(inp); inp.focus(); inp.select();
+  const finish = ok=>{
+    const v = inp.value.trim();
+    if(ok && v && v !== r.title) commit(()=>db.run("UPDATE reminders SET title=? WHERE id=?",[v,id]));
+    else render();
+  };
+  inp.onblur = ()=>finish(true);
+  inp.onkeydown = e=>{
+    if(e.key==="Enter"){ e.preventDefault(); inp.onblur=null; finish(true); }
+    if(e.key==="Escape"){ inp.onblur=null; finish(false); }
+  };
+}
+/* inline note editor — textarea under the task */
+function editNote(id){
+  const li = document.querySelector(`li[data-id="${id}"]`);
+  if(!li || li.querySelector(".note-in")) return;
+  const body = li.querySelector(".body");
+  const existing = body.querySelector(".note");
+  const r = q("SELECT note FROM reminders WHERE id=?",[id])[0];
+
+  const ta = document.createElement("textarea");
+  ta.className = "note-in";
+  ta.value = r.note || "";
+  ta.placeholder = "Add a note…";
+  const hint = document.createElement("span");
+  hint.className = "note-hint";
+  hint.textContent = "Ctrl+Enter to save · Esc to cancel";
+
+  if(existing) existing.replaceWith(ta); else body.appendChild(ta);
+  body.appendChild(hint);
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+
+  let closed = false;
+  const finish = ok=>{
+    if(closed) return; closed = true;
+    const v = ta.value.trim();
+    if(ok && v !== (r.note||"")) commit(()=>db.run("UPDATE reminders SET note=? WHERE id=?",[v,id]));
+    else render();
+  };
+  ta.onblur = ()=>finish(true);
+  ta.onkeydown = e=>{
+    if(e.key === "Enter" && (e.ctrlKey||e.metaKey)){ e.preventDefault(); finish(true); }
+    else if(e.key === "Escape"){ e.preventDefault(); finish(false); }
+  };
+}
+/* inline estimate edit — click the est chip */
+function editEst(id, el){
+  if(el.querySelector(".est-in")) return;
+  const r = q("SELECT est FROM reminders WHERE id=?",[id])[0];
+  const inp = document.createElement("input");
+  inp.className = "est-in";
+  inp.value = r.est ? fmtEst(r.est) : "";
+  inp.placeholder = "45m, 2h";
+  el.replaceWith(inp); inp.focus(); inp.select();
+  const finish = ok=>{
+    const v = parseEst(inp.value);
+    if(ok && v !== r.est) commit(()=>db.run("UPDATE reminders SET est=? WHERE id=?",[v,id]));
+    else render();
+  };
+  inp.onblur = ()=>finish(true);
+  inp.onkeydown = e=>{
+    if(e.key==="Enter"){ e.preventDefault(); inp.onblur=null; finish(true); }
+    if(e.key==="Escape"){ inp.onblur=null; finish(false); }
+  };
+}
+function bump(id,dir){
+  const rows = visible();
+  const i = rows.findIndex(r=>r.id===id), j = i+dir;
+  if(i<0||j<0||j>=rows.length) return;
+  const a = rows[i], b = rows[j];
+  commit(()=>{
+    db.run("UPDATE reminders SET pos=? WHERE id=?",[b.pos,a.id]);
+    db.run("UPDATE reminders SET pos=? WHERE id=?",[a.pos,b.id]);
+  });
+}
+
+document.getElementById("sortBy").onchange = e=>{
+  sortMode = e.target.value; localStorage.setItem("sortMode", sortMode); render();
+};
+document.getElementById("clearDone").onclick = ()=>{
+  if(!confirm("Delete all completed items?")) return;
+  commit(()=>db.run("DELETE FROM reminders WHERE done=1"));
+};
+document.getElementById("capBtn").onclick = ()=>{
+  const v = prompt("Hours you can realistically work per day:", (capacity/60).toString());
+  if(v === null) return;
+  const h = parseFloat(v);
+  if(h > 0){ capacity = Math.round(h*60); localStorage.setItem("capacity", capacity); render(); }
+};
+document.querySelectorAll(".filters button[data-f]").forEach(b=>{
+  b.onclick = ()=>{
+    filter = b.dataset.f;
+    document.querySelectorAll(".filters button[data-f]").forEach(x=>x.classList.toggle("on", x===b));
+    render();
+  };
+});
+document.getElementById("search").oninput = e=>{
+  searchTerm = e.target.value.trim().toLowerCase();
+  render();
+};
+
+/* ================= view ================= */
+function visible(){
+  let rs = q("SELECT * FROM reminders ORDER BY done ASC, pos ASC");
+  if(filter==="today") rs = rs.filter(r=>!r.done && isToday(r));
+  if(filter==="all")   rs = rs.filter(r=>!r.done);
+  if(filter==="done")  rs = rs.filter(r=>r.done);
+  if(searchTerm) rs = rs.filter(r=>r.title.toLowerCase().includes(searchTerm) || (r.note||"").toLowerCase().includes(searchTerm));
+
+  const noEstLast = (a,b)=>(a.est?0:1)-(b.est?0:1);
+  if(sortMode==="est-asc") rs.sort((a,b)=>noEstLast(a,b) || a.est-b.est);
+  if(sortMode==="due")     rs.sort((a,b)=>(a.due?0:1)-(b.due?0:1) || String(a.due).localeCompare(String(b.due)));
+  return rs;
+}
+
+function render(){
+  const all = q("SELECT * FROM reminders"), now = new Date();
+  const open = all.filter(r=>!r.done);
+  const today = open.filter(isToday);
+
+  cToday.textContent = today.length;
+  cDue.textContent   = open.filter(r=>r.due && new Date(r.due) <= now).length;
+  cOpen.textContent  = open.length - today.length;
+
+  const load = today.reduce((s,r)=>s+(r.est||0),0);
+  cCap.textContent   = `${fmtEst(load)||"0m"} / ${fmtEst(capacity)}`;
+  capLabel.textContent = load > capacity ? "Over capacity" : "Today's load";
+  capCard.classList.toggle("warn", load > capacity);
+
+  // estimate accuracy
+  const scored = all.filter(r=>r.done && r.est>0 && r.actual>0);
+  if(scored.length >= 3){
+    const ratio = scored.reduce((s,r)=>s+r.actual/r.est,0)/scored.length;
+    ratio_el().textContent = `Your tasks take about ${ratio.toFixed(2)}× your estimate (${scored.length} samples)`;
+  } else ratio_el().textContent = "";
+
+  const rows = visible();
+  list.innerHTML = rows.length ? rows.map((r,i)=>{
+    const late = !r.done && r.due && new Date(r.due) <= now;
+    const bits = [];
+    if(r.due) bits.push(`<span class="${late?'late':''}">${esc(r.due.replace('T',' '))}${late?' · overdue':''}</span>`);
+    if(r.repeat_days) bits.push(`<span class="rep">↻ every ${r.repeat_days}d</span>`);
+    if(r.done && r.actual && r.est){
+      const over = r.actual > r.est;
+      bits.push(`<span class="${over?'over':''}">took ${fmtEst(r.actual)}${over?` (est ${fmtEst(r.est)})`:''}</span>`);
+    }
+    return `<li class="${r.done?'done':''}" data-id="${r.id}">
+      <span class="num">${i+1}.</span>
+      <input type="checkbox" ${r.done?'checked':''} onchange="toggle(${r.id})">
+      <button class="star ${r.today?'on':''}" onclick="star(${r.id})" title="Pin to today">★</button>
+      <span class="body">
+        <span class="t" ondblclick="startEdit(${r.id}, this)" title="Double-click to edit">${esc(r.title)}</span>
+        ${bits.length?`<span class="m">${bits.join(' · ')}</span>`:''}
+        ${r.note?`<span class="note" onclick="editNote(${r.id})" title="Click to edit note">${esc(r.note)}</span>`:''}
+      </span>
+      <span class="est" onclick="editEst(${r.id}, this)" title="Click to edit estimate">${r.est?fmtEst(r.est):'+ est'}</span>
+      <span class="acts">
+        <button onclick="bump(${r.id},-1)" ${i===0||sortMode!=="manual"?'disabled':''} title="Move up">▲</button>
+        <button onclick="bump(${r.id},1)" ${i===rows.length-1||sortMode!=="manual"?'disabled':''} title="Move down">▼</button>
+        <button onclick="editNote(${r.id})" title="Add/edit note">✎</button>
+        <button onclick="del(${r.id})" title="Delete">✕</button>
+      </span></li>`;
+  }).join("") : `<div class="empty">${filter==="today"?"Nothing on today's list. Star something from All.":"Nothing here."}</div>`;
+}
+const ratio_el = ()=>document.getElementById("ratio");
+
+/* ================= keyboard ================= */
+addEventListener("keydown", e=>{
+  const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName);
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="z" && !e.shiftKey){ e.preventDefault(); undo(); }
+  else if((e.ctrlKey||e.metaKey) && (e.key.toLowerCase()==="y" || (e.shiftKey && e.key.toLowerCase()==="z"))){ e.preventDefault(); redo(); }
+  else if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="s"){ e.preventDefault(); save(); }
+  else if(e.key==="/" && !typing){ e.preventDefault(); title.focus(); }
+  else if(e.key==="Escape" && e.target===title){ title.value=""; title.blur(); }
+});
+
+/* ================= theme ================= */
+document.getElementById("sortBy").value = sortMode;
+function applyTheme(t){
+  document.documentElement.setAttribute("data-theme", t);
+  document.getElementById("themeBtn").textContent = t==="dark" ? "☀️" : "🌙";
+  localStorage.setItem("theme", t);
+}
+applyTheme(localStorage.getItem("theme") || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark"));
+document.getElementById("themeBtn").onclick = ()=>
+  applyTheme(document.documentElement.getAttribute("data-theme")==="dark" ? "light" : "dark");
+
+/* ================= notifications ================= */
+document.getElementById("notifBtn").onclick = ()=>{
+  Notification.requestPermission().then(p=>{
+    document.getElementById("notifBtn").textContent = p==="granted" ? "🔔" : "🔕";
+    toast(p==="granted" ? "Alerts on" : "Alerts blocked");
+  });
+};
+function check(){
+  if(!db) return;
+  const now = new Date(); let changed = false;
+  q("SELECT * FROM reminders WHERE done=0 AND fired=0 AND due IS NOT NULL").forEach(r=>{
+    if(new Date(r.due) <= now){
+      if(Notification.permission==="granted") new Notification("Reminder: "+r.title);
+      db.run("UPDATE reminders SET fired=1 WHERE id=?",[r.id]);
+      changed = true;
+    }
+  });
+  if(changed) persist();
+  render();
+}
+
+/* ================= file persistence ================= */
+const HAS_FSA = "showSaveFilePicker" in window;
+let fileHandle = null;
+
+function idb(mode, fn){
+  return new Promise((res,rej)=>{
+    const open = indexedDB.open("dashboard-fs", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("h");
+    open.onerror = () => rej(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction("h", mode);
+      const req = fn(tx.objectStore("h"));
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => rej(req.error);
+    };
+  });
+}
+const saveHandle = h => idb("readwrite", s => s.put(h, "db"));
+const loadHandle = () => idb("readonly", s => s.get("db"));
+const dropHandle = () => idb("readwrite", s => s.delete("db"));
+
+async function ensurePermission(h, write){
+  const opts = { mode: write ? "readwrite" : "read" };
+  if(await h.queryPermission(opts) === "granted") return true;
+  return await h.requestPermission(opts) === "granted";
+}
+
+async function save(){
+  if(!HAS_FSA) return legacyDownload();
+  try{
+    if(!fileHandle){
+      fileHandle = await window.showSaveFilePicker({
+        suggestedName: "plan-your-day.db",
+        types: [{description:"SQLite database", accept:{"application/octet-stream":[".db"]}}]
+      });
+      await saveHandle(fileHandle);
+    }
+    if(!await ensurePermission(fileHandle, true)){ toast("Permission denied"); return; }
+    const w = await fileHandle.createWritable();
+    await w.write(db.export());
+    await w.close();
+    setDirty(false);
+    toast("Saved to " + fileHandle.name);
+  }catch(err){ if(err.name !== "AbortError") toast("Save failed: " + err.message); }
+}
+
+async function load(){
+  if(!HAS_FSA) return document.getElementById("legacyLoad").click();
+  if(dirty && !confirm("Unsaved changes will be replaced. Continue?")) return;
+  try{
+    if(!fileHandle){
+      [fileHandle] = await window.showOpenFilePicker({
+        types: [{description:"SQLite database", accept:{"application/octet-stream":[".db"]}}]
+      });
+      await saveHandle(fileHandle);
+    }
+    if(!await ensurePermission(fileHandle, false)){ toast("Permission denied"); return; }
+    const buf = await (await fileHandle.getFile()).arrayBuffer();
+    db = new SQLlib.Database(new Uint8Array(buf));
+    undoStack = []; redoStack = []; snapshot(true);
+    persist(); setDirty(false); render();
+    toast("Loaded " + fileHandle.name);
+  }catch(err){ if(err.name !== "AbortError") toast("Load failed: " + err.message); }
+}
+
+async function relink(){
+  await dropHandle(); fileHandle = null; setDirty(dirty); save();
+}
+
+function legacyDownload(){
+  const blob = new Blob([db.export()],{type:"application/octet-stream"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = "plan-your-day.db"; a.click();
+  setDirty(false);
+}
+document.getElementById("legacyLoad").onchange = e=>{
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = ()=>{
+    db = new SQLlib.Database(new Uint8Array(r.result));
+    undoStack = []; redoStack = []; snapshot(true);
+    persist(); setDirty(false); render();
+  };
+  r.readAsArrayBuffer(f);
+};
+
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.style.opacity = 1;
+  clearTimeout(t._h); t._h = setTimeout(()=>t.style.opacity = 0, 2200);
+}
+
+(async ()=>{
+  if(!HAS_FSA){
+    document.getElementById("relinkBtn").style.display = "none";
+  }else{
+    try{ fileHandle = await loadHandle() || null; }catch{}
+  }
+  setDirty(false);
+})();
+</script>
+</body>
+</html>
