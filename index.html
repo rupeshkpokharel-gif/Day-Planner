@@ -116,7 +116,6 @@ li.done .t{text-decoration:line-through;color:var(--mut)}
 <div id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
-<script src="https://alcdn.msauth.net/browser/3.7.1/js/msal-browser.min.js"></script>
 <script>
 let db, SQLlib, filter="today", searchTerm="";
 let sortMode = localStorage.getItem("sortMode") || "manual";
@@ -500,8 +499,29 @@ function setDirty(v){
 }
 addEventListener("beforeunload", e=>{ if(dirty && account){ e.preventDefault(); e.returnValue=""; } });
 
+function loadScript(src){
+  return new Promise((res,rej)=>{
+    const el = document.createElement("script");
+    el.src = src; el.onload = res; el.onerror = () => rej(new Error("blocked: "+src));
+    document.head.appendChild(el);
+  });
+}
+
+async function loadMsal(){
+  if(typeof msal !== "undefined") return;
+  const cdns = [
+    "https://alcdn.msauth.net/browser/3.7.1/js/msal-browser.min.js",
+    "https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.7.1/lib/msal-browser.min.js",
+    "https://unpkg.com/@azure/msal-browser@3.7.1/lib/msal-browser.min.js"
+  ];
+  for(const u of cdns){
+    try{ await loadScript(u); if(typeof msal !== "undefined") return; }catch(e){}
+  }
+  throw new Error("MSAL could not be loaded from any CDN");
+}
+
 async function initAuth(){
-  if(typeof msal === "undefined"){ toast("MSAL library failed to load"); return; }
+  await loadMsal();
   msalApp = new msal.PublicClientApplication({
     auth: {
       clientId: CLIENT_ID,
@@ -535,6 +555,7 @@ async function getToken(interactive){
 
 async function signIn(){
   try{
+    if(!msalApp) await initAuth();
     const t = await getToken(true);
     if(!t) return;
     setDirty(dirty);
@@ -631,7 +652,7 @@ function toast(msg){
     if(account) await load(true);
   }catch(err){
     console.error(err);
-    toast("Auth init failed");
+    toast("Auth init failed: " + err.message);
   }
 })();
 </script>
